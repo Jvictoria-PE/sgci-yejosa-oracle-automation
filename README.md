@@ -1,0 +1,1 @@
+# sgci-yejosa-oracle-automation
