@@ -1,0 +1,71 @@
+name: Oracle Cloud read-only connection check
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check required secrets without printing values
+        env:
+          OCI_USER_OCID: ${{ secrets.OCI_USER_OCID }}
+          OCI_TENANCY_OCID: ${{ secrets.OCI_TENANCY_OCID }}
+          OCI_FINGERPRINT: ${{ secrets.OCI_FINGERPRINT }}
+          OCI_PRIVATE_KEY: ${{ secrets.OCI_PRIVATE_KEY }}
+          OCI_STACK_OCID: ${{ secrets.OCI_STACK_OCID }}
+        shell: bash
+        run: |
+          for name in OCI_USER_OCID OCI_TENANCY_OCID OCI_FINGERPRINT OCI_PRIVATE_KEY OCI_STACK_OCID; do
+            if [[ -z "${!name}" ]]; then
+              echo "::error::Required secret ${name} is missing"
+              exit 1
+            fi
+          done
+          echo "All five secrets are present."
+
+      - name: Install OCI Python SDK
+        run: python -m pip install --disable-pip-version-check 'oci>=2.130,<3'
+
+      - name: Verify stack access (read only)
+        env:
+          OCI_USER_OCID: ${{ secrets.OCI_USER_OCID }}
+          OCI_TENANCY_OCID: ${{ secrets.OCI_TENANCY_OCID }}
+          OCI_FINGERPRINT: ${{ secrets.OCI_FINGERPRINT }}
+          OCI_PRIVATE_KEY: ${{ secrets.OCI_PRIVATE_KEY }}
+          OCI_STACK_OCID: ${{ secrets.OCI_STACK_OCID }}
+        shell: bash
+        run: |
+          python - <<'PY'
+          import os
+          import tempfile
+          from pathlib import Path
+          import oci
+
+          with tempfile.TemporaryDirectory() as directory:
+              key_file = Path(directory) / "oci_key.pem"
+              key_file.write_text(os.environ["OCI_PRIVATE_KEY"].rstrip("\n") + "\n")
+              key_file.chmod(0o600)
+              config = {
+                  "user": os.environ["OCI_USER_OCID"],
+                  "tenancy": os.environ["OCI_TENANCY_OCID"],
+                  "fingerprint": os.environ["OCI_FINGERPRINT"],
+                  "key_file": str(key_file),
+                  "region": "sa-saopaulo-1",
+              }
+              oci.config.validate_config(config)
+              client = oci.resource_manager.ResourceManagerClient(config)
+              stack = client.get_stack(os.environ["OCI_STACK_OCID"]).data
+              if stack.display_name != "sgci-yejosa-always-free":
+                  raise RuntimeError("Stack name does not match expected target; no changes made.")
+              print("Oracle API authentication: OK")
+              print("Stack access: OK")
+              print("Stack name:", stack.display_name)
+              print("Stack lifecycle:", stack.lifecycle_state)
+              print("Region: sa-saopaulo-1")
+              print("No Apply, instance creation, or resource changes performed.")
+          PY
